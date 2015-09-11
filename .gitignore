@@ -6,4 +6,6 @@
 *.class
 
 *.zip
+*.tgz
 *- extract
+Libs

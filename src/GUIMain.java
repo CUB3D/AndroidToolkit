@@ -1,3 +1,8 @@
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.archivers.tar.TarUtils;
+import org.apache.commons.compress.utils.IOUtils;
+
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JFrame;
@@ -5,15 +10,13 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JTabbedPane;
-import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JTextPane;
-import javax.swing.SwingWorker;
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.util.List;
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -66,10 +69,92 @@ public class GUIMain
 
         try
         {
+            out.delete();
+        }catch(Exception e) {e.printStackTrace();}
+
+        try
+        {
             out.mkdirs();
         }catch(Exception e) {e.printStackTrace();}
 
-        unzip(in, out);
+
+        // extract tar from gzip
+
+        File tarOut = new File(out, "ImageTar.tar");
+
+        try
+        {
+            tarOut.createNewFile();
+        }catch (Exception e) {e.printStackTrace();} //TODO: better error handling
+
+        unGZIP(in, tarOut);
+
+        // extract files from tar
+
+        unTar(tarOut, out);
+
+        File extractedFolder = null;
+
+        for(File file : out.listFiles())
+        {
+            if(file.isDirectory())
+            {
+                // must be the extracted folder
+                extractedFolder = file;
+                break;
+            }
+        }
+
+        if (extractedFolder == null)
+        {
+            //error, tar failed to extract
+        }
+
+        // remove all the stuff I don't need, such as the flash-all.bat/sh scripts
+        // I only need the *.img files
+
+        for(File file : extractedFolder.listFiles())
+        {
+            String name = file.getName();
+
+            if(!name.endsWith(".zip") && !name.endsWith(".img"))
+            {
+                if(!file.delete())
+                {
+                    System.out.println("Couldn't delete unnecessary file, removing on exit");
+                    file.deleteOnExit();
+                }
+            }
+        }
+
+        // move everything from the extracted folder up a level, makes the flashing a bit easier
+
+        for(File file : extractedFolder.listFiles())
+        {
+            try
+            {
+                Files.move(file.toPath(), new File(out, file.getName()).toPath());
+            } catch (IOException e) {e.printStackTrace();} //TODO: better error handling
+        }
+
+        // get rid of all the other files I don't need, such as the tar archive
+
+        for(File file : out.listFiles())
+        {
+            String name = file.getName();
+
+            if(!name.endsWith(".zip") && !name.endsWith(".img"))
+            {
+                if(!file.delete())
+                {
+                    System.out.println("Couldn't delete unnecessary file, removing on exit");
+                    file.deleteOnExit();
+                }
+            }
+        }
+
+        if(true)
+        return;
 
         String imageZip = "";
 
@@ -125,14 +210,67 @@ public class GUIMain
         instance.statusLog.setText(instance.statusLog.getText() + taskName + "\n");
     }
 
+    public static void unTar(File infile, File outfile)
+    {
+        // damn you java for not having native tar support
 
+        try
+        {
+            TarArchiveInputStream debInputStream = new TarArchiveInputStream(new FileInputStream(infile));
+            TarArchiveEntry entry = null;
+
+            while ((entry = (TarArchiveEntry) debInputStream.getNextEntry()) != null)
+            {
+                final File outputFile = new File(outfile, entry.getName());
+
+                if (entry.isDirectory())
+                {
+                    if (!outputFile.exists())
+                    {
+                        outputFile.mkdirs();
+                    }
+                } else
+                {
+                    OutputStream outputFileStream = new FileOutputStream(outputFile);
+                    IOUtils.copy(debInputStream, outputFileStream);
+                    outputFileStream.flush();
+                    outputFileStream.close();
+                }
+            }
+
+            debInputStream.close();
+        }catch (Exception e) {e.printStackTrace();}; //TODO: better error handling
+    }
+
+    public static void unGZIP(File infile, File outfile)
+    {
+        try
+        {
+            BufferedOutputStream outputStream = new BufferedOutputStream(new FileOutputStream(outfile));
+            GZIPInputStream gzipInputStream = new GZIPInputStream(new FileInputStream(infile));
+
+            int BUFFER = 1024*1024*1024;
+
+            int dataSize = 0;
+            byte[] data = new byte[BUFFER];
+            while((dataSize = gzipInputStream.read(data, 0, BUFFER)) != -1)
+            {
+                outputStream.write(data, 0, dataSize);
+            }
+
+            outputStream.flush();
+            outputStream.close();
+
+            gzipInputStream.close();
+        }catch (Exception e) {e.printStackTrace();} // TODO: add better error handling
+    }
 
     public static  void unzip(File infile, File outPath)
     {
         int BUFFER = 2048;
 
         try{
-            BufferedOutputStream out = null;
+            BufferedOutputStream out;
             ZipInputStream  in = new ZipInputStream(new FileInputStream(infile));
             ZipEntry entry;
             boolean isDirectory=false;
@@ -163,7 +301,6 @@ public class GUIMain
         }
         catch(Exception e){
             e.printStackTrace();
-            System.exit(0);
         }
     }
 
