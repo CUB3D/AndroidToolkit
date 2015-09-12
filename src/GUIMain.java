@@ -3,15 +3,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarUtils;
 import org.apache.commons.compress.utils.IOUtils;
 
-import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JPanel;
-import javax.swing.JProgressBar;
-import javax.swing.JTabbedPane;
-import javax.swing.JTextField;
-import javax.swing.JTextPane;
+import javax.swing.*;
+import java.awt.*;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -56,8 +49,16 @@ public class GUIMain
 
         instance.bootFromRecoveryButton.addActionListener((al) -> bootFromRecovery());
         instance.flashRecoveryButton.addActionListener((al) -> flashRecovery());
-        instance.flashFactoryButton.addActionListener((al) -> flashFactory());
+        instance.flashFactoryButton.addActionListener((al) -> flashFactory_());
     }
+
+    private static void flashFactory_()
+    {
+        new Thread(() -> {
+            flashFactory();
+        }).start();
+    }
+
 
     private static void flashFactory()
     {
@@ -113,8 +114,13 @@ public class GUIMain
         // remove all the stuff I don't need, such as the flash-all.bat/sh scripts
         // I only need the *.img files
 
+        int len = extractedFolder.listFiles().length;
+        setCurTask("Cleanup ", len, 0);
+        int i = 0;
         for(File file : extractedFolder.listFiles())
         {
+            i++;
+
             String name = file.getName();
 
             if(!name.endsWith(".zip") && !name.endsWith(".img"))
@@ -125,22 +131,41 @@ public class GUIMain
                     file.deleteOnExit();
                 }
             }
+            setCurTask("Cleanup: " + file.getName(), len, i);
         }
+
+        setCurTask("Cleanup ", len, len);
 
         // move everything from the extracted folder up a level, makes the flashing a bit easier
 
+        len = extractedFolder.listFiles().length;
+        setCurTask("Moving files ", len, 0);
+
+        i = 0;
         for(File file : extractedFolder.listFiles())
         {
+            i++;
+
             try
             {
                 Files.move(file.toPath(), new File(out, file.getName()).toPath());
             } catch (IOException e) {e.printStackTrace();} //TODO: better error handling
+
+            setCurTask("Moving " + file.getName(), len, i);
         }
+
+        setCurTask("Moving files ", len, len);
 
         // get rid of all the other files I don't need, such as the tar archive
 
+        len = out.listFiles().length;
+        setCurTask("Cleanup ", len, 0);
+        i = 0;
+
         for(File file : out.listFiles())
         {
+            i++;
+
             String name = file.getName();
 
             if(!name.endsWith(".zip") && !name.endsWith(".img"))
@@ -151,35 +176,163 @@ public class GUIMain
                     file.deleteOnExit();
                 }
             }
+
+            setCurTask("Cleanup " + file.getName(), len, 0);
         }
 
-        if(true)
-        return;
+        setCurTask("Cleanup ", len, len);
 
-        String imageZip = "";
+        setCurTask("Finding zip", 1, 0);
+
+        File imageZip = null;
 
         for(File f : out.listFiles())
         {
             if(f.getName().endsWith(".zip"))
             {
-                imageZip = f.getPath();
+                imageZip = f;
             }
         }
 
-        if(imageZip.isEmpty())
+        setCurTask("Finding zip", 1, 1);
+
+        unzip(imageZip, out);
+
+        // one final selective delete to get rid of unneeded files
+
+        for(File file : out.listFiles())
         {
-            setCurTask("No image zip found, flash failed", 1, 1);
+            String name = file.getName();
+
+            if(!name.endsWith(".img"))
+            {
+                if(!file.delete())
+                {
+                    System.out.println("Couldn't delete unnecessary file, removing on exit");
+                    file.deleteOnExit();
+                }
+            }
+        }
+
+        // find the bootloader
+
+        setCurTask("Checking files", 6, 0);
+
+        File bootloader = null;
+
+        for(File file : out.listFiles())
+        {
+            if(file.getName().startsWith("bootloader-"))
+            {
+                bootloader = file;
+                break;
+            }
+
+        }
+
+        if(bootloader == null)
+        {
+            // all files must be present for a successful upgrade
             return;
         }
 
-        File imageOut = new File(out, "image - extracted");
+        setCurTask("Checking files", 6, 1);
 
-        try
+        // find the radio
+
+        File radio = null;
+
+        for(File file : out.listFiles())
         {
-            imageOut.mkdirs();
-        }catch(Exception e) {e.printStackTrace();}
+            if(file.getName().startsWith("radio-"))
+            {
+                radio = file;
+                break;
+            }
+        }
 
-        unzip(new File(imageZip), imageOut);
+        if(radio == null)
+        {
+            // all files must be present for a successful upgrade
+            return;
+        }
+
+        setCurTask("Checking files", 6, 2);
+
+        // check for system
+
+        File system = new File(out, "system.img");
+
+        if(!system.exists())
+        {
+            return;
+        }
+
+        setCurTask("Checking files", 6, 3);
+
+        // check for recovery
+
+        File recovery = new File(out, "recovery.img");
+
+        if(!recovery.exists())
+        {
+            return;
+        }
+
+        setCurTask("Checking files", 6, 4);
+
+        // check for boot
+
+        File boot = new File(out, "boot.img");
+
+        if(!boot.exists())
+        {
+            return;
+        }
+
+        setCurTask("Checking files", 6, 5);
+
+        File cache = new File(out, "cache.img");
+
+        if(!cache.exists())
+        {
+            return;
+        }
+
+        setCurTask("Checking files", 6, 6);
+
+        String msg = "Are you sure you want to flash this:\n";
+        msg += "Bootloader: " + bootloader.getPath() + "\n";
+        msg += "Radio: " + radio.getPath() + "\n";
+        msg += "System: " + system.getPath() + "\n";
+        msg += "Recovery: " + recovery.getPath() + "\n";
+        msg += "Boot: " + boot.getPath() + "\n";
+        msg += "Cache: " + cache.getPath() + "\n";
+
+        if(JOptionPane.showConfirmDialog(GUIMain.instance.mainPanel, msg) == JOptionPane.OK_OPTION)
+        {
+            // now the fun part, flashing
+
+            setCurTask("Flashing bootloader", 6, 0);
+
+            CLIHelper.exec("adb reboot bootloader");
+            CLIHelper.exec("fastboot flash bootloader \"" + bootloader.getPath() + "\"");
+
+            setCurTask("Flashing radio", 6, 1);
+
+            CLIHelper.exec("fastboot flash radio \"" + radio.getPath() + "\"");
+            CLIHelper.exec("fastboot reboot-bootloader");
+            setCurTask("Flashing system", 6, 2);
+            CLIHelper.exec("fastboot flash system \"" + system.getPath() + "\"");
+            setCurTask("Flashing recovery", 6, 3);
+            CLIHelper.exec("fastboot flash recovery \"" + recovery.getPath() + "\"");
+            setCurTask("Flashing boot", 6, 4);
+            CLIHelper.exec("fastboot flash boot \"" + boot.getPath() + "\"");
+            setCurTask("Flashing cache", 6, 5);
+            CLIHelper.exec("fastboot flash cache \"" + cache.getPath() + "\"");
+            setCurTask("Done: rebooting", 6, 6);
+            CLIHelper.exec("fastboot reboot");
+        }
     }
 
     private static void bootFromRecovery()
@@ -214,6 +367,8 @@ public class GUIMain
     {
         // damn you java for not having native tar support
 
+        setCurTask("UnTARing " + infile.getName(), 1, 0);
+
         try
         {
             TarArchiveInputStream debInputStream = new TarArchiveInputStream(new FileInputStream(infile));
@@ -239,11 +394,15 @@ public class GUIMain
             }
 
             debInputStream.close();
-        }catch (Exception e) {e.printStackTrace();}; //TODO: better error handling
+        }catch (Exception e) {e.printStackTrace();} //TODO: better error handling
+
+        setCurTask("UnTARing " + infile.getName(), 1, 1);
     }
 
     public static void unGZIP(File infile, File outfile)
     {
+        setCurTask("UnGZIPing " + infile.getName(), 1, 0);
+
         try
         {
             BufferedOutputStream outputStream = new BufferedOutputStream(new FileOutputStream(outfile));
@@ -263,11 +422,15 @@ public class GUIMain
 
             gzipInputStream.close();
         }catch (Exception e) {e.printStackTrace();} // TODO: add better error handling
+
+        setCurTask("UnGZIPing " + infile.getName(), 1, 1);
     }
 
     public static  void unzip(File infile, File outPath)
     {
-        int BUFFER = 2048;
+        int BUFFER = 1024 * 1024 * 1024;
+
+        setCurTask("UnZIPing: " + infile.getName(), 1, 0);
 
         try{
             BufferedOutputStream out;
@@ -302,7 +465,7 @@ public class GUIMain
         catch(Exception e){
             e.printStackTrace();
         }
+
+        setCurTask("UnZIPing: " + infile.getName(), 1, 1);
     }
-
-
 }
